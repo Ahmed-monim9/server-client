@@ -1,0 +1,79 @@
+MultiClientServer::MultiClientServer(QObject *parent)
+    : QTcpServer(parent) {}
+
+void MultiClientServer::incomingConnection(qintptr socketDescriptor) {
+    if (clients.size() >= 5) {
+        QTcpSocket *rejectedClient = new QTcpSocket(this);
+        rejectedClient->setSocketDescriptor(socketDescriptor);
+        rejectedClient->write("Server is busy. Try again later.\n");
+        rejectedClient->disconnectFromHost();
+        return;
+    }
+
+    QTcpSocket *clientSocket = new QTcpSocket(this);
+    clientSocket->setSocketDescriptor(socketDescriptor);
+    clients.append(clientSocket);
+
+    connect(clientSocket, &QTcpSocket::readyRead, this, &MultiClientServer::onReadyRead);
+    connect(clientSocket, &QTcpSocket::disconnected, this, &MultiClientServer::onDisconnected);
+
+    clientSocket->write("Welcome to the server!\n");
+
+    if (clients.size() < 4) {
+        sendToAll(QString("Current number of connected clients: %1\n").arg(clients.size()));
+    }
+
+    checkGameStart();
+}
+
+void MultiClientServer::onReadyRead() {
+    QTcpSocket *clientSocket = qobject_cast<QTcpSocket*>(sender());
+    QString data = clientSocket->readAll().trimmed();
+
+    if (clients.size() == 4 && letters.size() < 4) {
+        letters.append(data);
+        if (letters.size() == 4) {
+            handleLettersFromClients();
+        }
+    } else {
+        sendToAll(data, clientSocket);  // Рассылаем сообщение остальным клиентам
+    }
+}
+
+void MultiClientServer::onDisconnected() {
+    QTcpSocket *clientSocket = qobject_cast<QTcpSocket*>(sender());
+    clients.removeOne(clientSocket);
+    clientSocket->deleteLater();
+
+    if (clients.size() < 4) {
+        endGame();  // Если клиент отключился во время игры, завершаем игру
+    }
+}
+
+void MultiClientServer::sendToAll(const QString &message, QTcpSocket *excludeClient) {
+    for (QTcpSocket *client : clients) {
+        if (client != excludeClient) {
+            client->write(message.toUtf8());
+        }
+    }
+}
+
+void MultiClientServer::checkGameStart() {
+    if (clients.size() == 4) {
+        sendToAll("Game starts. Please enter 5 letters for the word.\n");
+    }
+}
+
+void MultiClientServer::handleLettersFromClients() {
+    longWord = letters.join("");  // Собираем длинное слово
+    sendToAll(QString("The long word is: %1\n").arg(longWord));
+    sendToAll("Now create words from the long word.\n");
+}
+
+void MultiClientServer::endGame() {
+    sendToAll("Game over. A client disconnected.\n");
+    for (QTcpSocket *client : clients) {
+        client->disconnectFromHost();
+    }
+    clients.clear();
+}
